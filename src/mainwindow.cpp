@@ -1,7 +1,12 @@
 #include "mainwindow.h"
 
 #include <cmath>
+#include <future>
+#include <omp.h> // OpenMP
 #include <vector>
+
+#include <QTime>
+#include <queue>
 
 #include "./ui_mainwindow.h"
 #include "about.h"
@@ -10,11 +15,35 @@
 
 #define PI 3.1415926535
 
+#if QGRAPHICSEFFECT
+QImage
+blurImage(const QImage& source, int blurRadius)
+{
+  if (source.isNull()) QImage();
+  QGraphicsScene      scene;
+  QGraphicsPixmapItem item;
+  item.setPixmap(QPixmap::fromImage(source));
+  auto* blur = new QGraphicsBlurEffect;
+  if (blurRadius < 0)
+    blurRadius = 0;
+  else if (blurRadius > 20)
+    blurRadius = 20;
+  blur->setBlurRadius(blurRadius);
+  item.setGraphicsEffect(blur);
+  scene.addItem(&item);
+  QImage result(source.size(), QImage::Format_ARGB32);
+  result.fill(Qt::transparent);
+  QPainter painter(&result);
+  scene.render(&painter, QRectF(), QRect(0, 0, source.width(), source.height()));
+  return result;
+}
+#else
+
 QRgb
-makePixel(const QImage&                           sourceImg,
-          const std::vector<std::vector<double>>& gaussian,
-          const int                               pos_x,
-          const int                               pos_y)
+makePixel(const QImage&                            sourceImg,
+          const std::vector<std::vector<double> >& gaussian,
+          const int                                pos_x,
+          const int                                pos_y)
 {
   int gaussianSize = gaussian.size();
   int radius       = (gaussianSize + 1) / 2;
@@ -23,76 +52,66 @@ makePixel(const QImage&                           sourceImg,
   double summGreen = 0;
   double summBlue  = 0;
 
-  // int start_x = pos_x - radius + 1;
-  // int stop_x  = pos_x + radius;
-  // int start_y = pos_y - radius + 1;
-  // int stop_y  = pos_y + radius;
+  {
+    for (int row = 0; row < gaussianSize; ++row) {
+      for (int col = 0; col < gaussianSize; ++col) {
+        int img_x = pos_x - radius + 1 + col;
+        int img_y = pos_y - radius + 1 + row;
 
-  for (int row = 0; row < gaussianSize; ++row) {
-    for (int col = 0; col < gaussianSize; ++col) {
-      int img_x = pos_x - radius + 1 + col;
-      int img_y = pos_y - radius + 1 + row;
+        if (img_x < 0 || img_x >= sourceImg.width() || img_y < 0 || img_y >= sourceImg.height())
+          continue;
+        QRgb pixel = sourceImg.pixel(img_x, img_y);
 
-      if (img_x < 0 || img_x >= sourceImg.width() || img_y < 0 || img_y >= sourceImg.height())
-        continue;
-      QRgb pixel = sourceImg.pixel(img_x, img_y);
+        int redValue   = qRed(pixel);
+        int greenValue = qGreen(pixel);
+        int blueValue  = qBlue(pixel);
 
-      int redValue   = qRed(pixel);
-      int greenValue = qGreen(pixel);
-      int blueValue  = qBlue(pixel);
+        double gaussianKoef = gaussian[col][row];
 
-      double gaussianKoef = gaussian[col][row];
-
-      summRed += redValue * gaussianKoef;
-      summGreen += greenValue * gaussianKoef;
-      summBlue += blueValue * gaussianKoef;
+        summRed += redValue * gaussianKoef;
+        summGreen += greenValue * gaussianKoef;
+        summBlue += blueValue * gaussianKoef;
+      }
     }
   }
-
-  double countPix = gaussianSize * gaussianSize;
-
-  int resRedValue   = summRed /*/ countPix*/;
-  int resGreenValue = summGreen /*/ countPix*/;
-  int resBlueValue  = summBlue /*/ countPix*/;
-
-  return qRgb(resRedValue, resGreenValue, resBlueValue);
+  return qRgb(summRed, summGreen, summBlue);
 }
 
-// QImage
-// blurImage(const QImage& source, const int blurRadius)
-// {
-
-//   // if (source.isNull()) QImage();
-//   // QGraphicsScene      scene;
-//   // QGraphicsPixmapItem item;
-//   // item.setPixmap(QPixmap::fromImage(source));
-//   // auto* blur = new QGraphicsBlurEffect;
-//   // if (blurRadius < 0)
-//   // blurRadius = 0;
-//   // else if (blurRadius > 10)
-//   // blurRadius = 10;
-//   // blur->setBlurRadius(blurRadius);
-//   // item.setGraphicsEffect(blur);
-//   // scene.addItem(&item);
-//   // QImage result(source.size(), QImage::Format_ARGB32);
-//   // result.fill(Qt::transparent);
-//   // QPainter painter(&result);
-//   // scene.render(&painter, QRectF(), QRect(0, 0, source.width(), source.height()));
-//   return result;
-// }
-
 QImage
-blurImage(const QImage& sourseImage, const std::vector<std::vector<double>> gaussian)
+blurImage(const QImage& sourseImage, const std::vector<std::vector<double> > gaussian)
 {
   QImage result(sourseImage.size(), QImage::Format_ARGB32);
+#ifndef QUELLE
+#pragma omp parallel
+  {
+    for (int row = 0; row < sourseImage.height(); ++row) {
+#pragma omp for
+      for (int col = 0; col < sourseImage.width(); ++col) {
+        result.setPixelColor(col, row, makePixel(sourseImage, gaussian, col, row));
+      }
+    }
+  }
+#else
+  std::queue<std::future<QRgb> > listColor;
+  for (int row = 0; row < sourseImage.height(); ++row) {
+    for (int col = 0; col < sourseImage.width(); ++col) {
+      listColor.push(std::async(std::launch::async, makePixel, sourseImage, gaussian, col, row));
+    }
+  }
 
   for (int row = 0; row < sourseImage.height(); ++row) {
     for (int col = 0; col < sourseImage.width(); ++col) {
-      result.setPixelColor(col, row, makePixel(sourseImage, gaussian, col, row));
+      listColor.front().wait();
+      result.setPixelColor(col, row, listColor.front().get());
+      listColor.pop();
     }
   }
+
+#endif
+
   return result;
 }
+#endif
 
 void
 saveData(int radius)
@@ -127,6 +146,8 @@ MainWindow::MainWindow(QWidget* parent)
   ui->radiusEdit->setText(QString::number(m_radiusBlur));
   m_progress.setRange(0, 0);
   m_progress.setCancelButton(0);
+  m_progress.setWindowFlags(Qt::WindowStaysOnTopHint /*| Qt::Window | Qt::WindowTitleHint |
+                            Qt::CustomizeWindowHint*/);
   m_progress.close();
 }
 
@@ -188,14 +209,19 @@ MainWindow::on_pushButton_clicked()
   m_activateFilter = true;
   m_filterDone     = false;
 
-  // blurImage();
+#if QGRAPHICSEFFECT
+  futureImage = QtConcurrent::run(blurImage, m_sourseImage, m_radiusBlur);
+#else
+  futureImage = QtConcurrent::run(blurImage, m_sourseImage, m_gaussian);
+#endif
 
-  futureImage                     = QtConcurrent::run(blurImage, m_sourseImage, m_gaussian);
   QFutureWatcher<QImage>* watcher = new QFutureWatcher<QImage>(this);
   connect(watcher, SIGNAL(finished()), this, SLOT(on_update_clicked()));
   connect(watcher, SIGNAL(finished()), watcher, SLOT(deleteLater()));
   watcher->setFuture(futureImage);
   m_progress.open();
+  m_compTime.restart();
+  // m_compTime.start();
 }
 
 void
@@ -206,7 +232,11 @@ MainWindow::on_radiusEdit_textChanged(const QString& arg)
     m_radiusBlur = 20;
   else if (m_radiusBlur < 1)
     m_radiusBlur = 1;
+#if QGRAPHICSEFFECT
+    /// *
+#else
   updateGaussian(m_radiusBlur);
+#endif
 }
 
 void
@@ -216,7 +246,11 @@ MainWindow::on_pBradUp_clicked()
   if (m_radiusBlur < 20) {
     m_radiusBlur += 1;
     ui->radiusEdit->setText(QString::number(m_radiusBlur));
+#if QGRAPHICSEFFECT
+    /// *
+#else
     updateGaussian(m_radiusBlur);
+#endif
   }
 }
 
@@ -227,14 +261,18 @@ MainWindow::on_pBradDown_clicked()
   if (m_radiusBlur > 2) {
     m_radiusBlur -= 1;
     ui->radiusEdit->setText(QString::number(m_radiusBlur));
+#if QGRAPHICSEFFECT
+    /// *
+#else
     updateGaussian(m_radiusBlur);
+#endif
   }
 }
 
 void
 MainWindow::on_update_clicked()
 {
-  ui->statusbar->showMessage("Обновить изображение.");
+  // ui->statusbar->showMessage("Обновить изображение.");
   m_progress.close();
   if (futureImage.isFinished() && m_activateFilter) {
     m_filterImage = futureImage.result();
@@ -243,8 +281,14 @@ MainWindow::on_update_clicked()
     m_filterDone     = true;
     m_activateFilter = false;
   }
-}
+  int   duration = m_compTime.elapsed();
+  QTime durationTime(0, 0, 0);
 
+  ui->statusbar->showMessage("Время выполения преобразования: " +
+                             durationTime.addMSecs(duration).toString("HH:mm:ss:zzz") + " мс.");
+}
+#if QGraphicsEffect
+#else
 void
 MainWindow::updateGaussian(const int radius)
 {
@@ -295,16 +339,4 @@ MainWindow::updateGaussian(const int radius)
   }
   m_gaussian.shrink_to_fit();
 }
-
-// void
-// MainWindow::blurImage()
-// {
-//   QImage result(m_sourseImage.size(), QImage::Format_ARGB32);
-
-//   for (int row = 0; row < m_sourseImage.height(); ++row) {
-//     for (int col = 0; col < m_sourseImage.width(); ++col) {
-//       result.setPixelColor(col, row, makePixel(m_sourseImage, m_gaussian, col, row));
-//     }
-//   }
-//   m_filterImage = result;
-// }
+#endif

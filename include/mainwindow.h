@@ -1,6 +1,8 @@
 #ifndef MAINWINDOW_H
 #define MAINWINDOW_H
 
+#define QGRAPHICSEFFECT false
+
 #include <fstream>
 #include <string>
 
@@ -15,6 +17,7 @@
 #include <QPainter>
 #include <QProgressDialog>
 #include <QtConcurrent>
+#include <QElapsedTimer>
 
 int
 readData();
@@ -52,20 +55,21 @@ private slots:
 
   void on_update_clicked();
 
+#if QGRAPHICSEFFECT
+#else
 private:
   void updateGaussian(const int radius);
-
-  // void blurImage();
-
+#endif
 private:
-  Ui::MainWindow* ui;
-  QImage          m_sourseImage;
-  QImage          m_filterImage;
-   QFuture<QImage>                  futureImage;
-  bool m_activateFilter = false;
-  bool m_filterDone     = false;
-  int  m_radiusBlur     = 2;
-   QProgressDialog                  m_progress;
+  Ui::MainWindow*                  ui;
+  QImage                           m_sourseImage;
+  QImage                           m_filterImage;
+  QFuture<QImage>                  futureImage;
+  bool                             m_activateFilter = false;
+  bool                             m_filterDone     = false;
+  int                              m_radiusBlur     = 2;
+  QProgressDialog                  m_progress;
   std::vector<std::vector<double>> m_gaussian;
+  QElapsedTimer m_compTime;
 };
 #endif // MAINWINDOW_H

@@ -2,7 +2,9 @@
 
 #include <cmath>
 #include <future>
+#ifdef OPEN_MP
 #include <omp.h> // OpenMP
+#endif
 #include <vector>
 
 #include <QTime>
@@ -82,10 +84,14 @@ blurImage(const QImage& sourseImage, const std::vector<std::vector<double> > gau
 {
   QImage result(sourseImage.size(), QImage::Format_ARGB32);
 #ifndef QUELLE
+#ifdef OPEN_MP
 #pragma omp parallel
+#endif
   {
     for (int row = 0; row < sourseImage.height(); ++row) {
+#ifdef OPEN_MP
 #pragma omp for
+#endif
       for (int col = 0; col < sourseImage.width(); ++col) {
         result.setPixelColor(col, row, makePixel(sourseImage, gaussian, col, row));
       }

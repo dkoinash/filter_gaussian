@@ -3,6 +3,8 @@
 
 #define QGRAPHICSEFFECT false
 
+#define OPEN_MP true
+
 #include <fstream>
 #include <string>
 
